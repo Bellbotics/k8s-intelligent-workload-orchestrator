@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-light
+  namespace: workload-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-light
+  template:
+    metadata:
+      labels:
+        app: worker-light
+    spec:
+      containers:
+        - name: worker-light
+          image: workload-demo/worker-light:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka:9092"
+            - name: TOPIC
+              value: "jobs.light"
+            - name: GROUP_ID
+              value: "worker-light-v1"
+            - name: WORK_MS_MIN
+              value: "20"
+            - name: WORK_MS_MAX
+              value: "120"
+            - name: BUSY_CPU
+              value: "true"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "256Mi"

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-heavy
+  namespace: workload-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-heavy
+  template:
+    metadata:
+      labels:
+        app: worker-heavy
+    spec:
+      containers:
+        - name: worker-heavy
+          image: workload-demo/worker-heavy:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka:9092"
+            - name: TOPIC
+              value: "jobs.heavy"
+            - name: GROUP_ID
+              value: "worker-heavy-v1"
+            - name: WORK_MS_MIN
+              value: "300"
+            - name: WORK_MS_MAX
+              value: "900"
+            - name: BUSY_CPU
+              value: "true"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1024Mi"
