@@ -1,122 +1,248 @@
-# Kubernetes Intelligent Workload Orchestrator (Kafka + Autoscaling + Observability Hooks)
+# Kubernetes Intelligent Workload Orchestrator  
+### Kafka + Intelligent Routing + Independent Autoscaling
 
-A small, production-inspired demo that shows how to run **bursty, compute-intensive jobs** alongside a **high-throughput API** on Kubernetes using:
+A production-inspired Kubernetes demo that shows how to run **bursty, compute-intensive workloads** alongside a **high-throughput API** using:
 
-- **Kafka** for durable, decoupled ingestion
-- A **Workload Classifier** that routes jobs to **light** vs **heavy** worker pools
-- **Separate Deployments + HPAs** per worker class (so heavy jobs don’t destabilize light workloads)
-- **OpenTelemetry hooks** (optional) for traces/metrics (kept minimal)
+- Kafka for durable, decoupled ingestion
+- Intelligent workload classification (light vs heavy)
+- Independent worker pools with separate HPAs
+- Resource governance (requests/limits)
+- Observability hooks
+- Isolation to prevent cross-workload instability
 
-This is an **AI-adjacent infrastructure demo**: the “intelligence” is the ability to **predict resource class** (light vs heavy) before scheduling. The classifier is intentionally simple (heuristic + optional ML stub), but the infrastructure patterns match real-world platform needs.
-
----
-
-## What you get
-
-- `services/api` — REST API to submit jobs and query status (pod-local status store for demo)
-- `services/classifier` — consumes `jobs.in`, classifies, publishes to `jobs.light` or `jobs.heavy`
-- `services/worker-light` — consumes `jobs.light`, simulates fast processing
-- `services/worker-heavy` — consumes `jobs.heavy`, simulates CPU/memory-heavy processing
-- `infra/k8s` — minimal Kubernetes YAML (Kafka + services + HPAs)
-- `scripts/demo.sh` — **3-step demo** (deploy → generate load → observe)
+This is an **AI-adjacent infrastructure demo** focused on operationalization patterns — not model training.
 
 ---
 
-## Quickstart (3 steps)
+# 🎯 Problem This Demonstrates
+
+In distributed systems, mixed workloads often share infrastructure:
+
+- High-volume request/response APIs
+- Bursty, memory-intensive background jobs
+- Unpredictable payload sizes
+- CPU spikes during processing
+
+If not isolated correctly:
+- Heavy jobs degrade light workloads
+- Autoscaling becomes unstable
+- OOMKills increase
+- API latency degrades
+
+This demo shows how to prevent that using intelligent routing and Kubernetes-native scaling.
+
+---
+
+# 🏗 Architecture Overview
+
+## Logical Flow
+
+```mermaid
+flowchart LR
+  client[Client / Load Generator] --> api[API Service]
+  api -->|produce| jin[(Kafka topic: jobs.in)]
+
+  jin -->|consume| cls[Workload Classifier]
+  cls -->|produce light| jlight[(Kafka topic: jobs.light)]
+  cls -->|produce heavy| jheavy[(Kafka topic: jobs.heavy)]
+
+  jlight -->|consume| wL[Worker Pool: Light]
+  jheavy -->|consume| wH[Worker Pool: Heavy]
+
+  wL --> out[(Logs / Result Sink)]
+  wH --> out
+```
+
+---
+
+## Kubernetes Deployment View
+
+```mermaid
+flowchart TB
+  subgraph NS["Namespace: workload-demo"]
+    subgraph K["Kafka - single node (KRaft)"]
+      broker[(kafka)]
+    end
+
+    api["Deployment: api"] --> svcapi["Service: api"]
+    cls["Deployment: classifier"]
+    wl["Deployment: worker-light"]
+    wh["Deployment: worker-heavy"]
+
+    hpaL["HPA: worker-light"] --> wl
+    hpaH["HPA: worker-heavy"] --> wh
+
+    api --> broker
+    cls --> broker
+    wl --> broker
+    wh --> broker
+  end
+```
+
+---
+
+# 🧠 Intelligent Classification
+
+Baseline heuristic:
+
+- `fileSizeMb >= 50`
+- OR `pageCount >= 200`
+- OR `imageCount >= 50`
+
+→ route to **heavy**
+
+Otherwise → **light**
+
+This is intentionally simple and can be replaced with a real ML model without changing infrastructure.
+
+---
+
+# 🚀 Quickstart (3 Steps)
+
+### 1️⃣ Deploy
 
 ```bash
 bash scripts/demo.sh deploy
+```
+
+### 2️⃣ Generate Load
+
+```bash
 bash scripts/demo.sh load
+```
+
+### 3️⃣ Observe Scaling
+
+```bash
 bash scripts/demo.sh observe
 ```
 
-- `deploy` builds local images, deploys Kafka + services + HPAs (and installs metrics-server if missing)
-- `load` sends a mixed workload to the API
-- `observe` watches HPAs/pods and suggests log commands
+---
+
+# 📈 Results
+
+## Intelligent Routing + Independent Scaling
+
+### Baseline (Single Shared Worker Pool – Hypothetical)
+
+- Heavy jobs increase CPU/memory pressure across all pods
+- Light job latency increases during burst
+- HPA scales entire pool aggressively
+- Higher risk of OOMKills
+
+### Intelligent Routing (This Demo)
+
+- Heavy jobs route only to `worker-heavy`
+- Light jobs remain isolated
+- Heavy pool scales independently
+- No cross-impact between workload classes
 
 ---
 
-## Prerequisites
+# 📸 Screenshot Checklist
 
-- Kubernetes cluster (kind/minikube OK)
-- `kubectl`
-- Docker (to build local images)
-- Python 3.11+ (for `scripts/loadgen.py`)
-- metrics-server (required for HPA; script can install)
+### HPA Scaling
 
----
-
-## Demo endpoints
-
-The script will port-forward the API to `http://localhost:8080` during `load`.
-
-Submit a light job:
 ```bash
-curl -s -X POST http://localhost:8080/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"fileSizeMb": 12, "pageCount": 40, "imageCount": 2}'
+kubectl -n workload-demo get hpa
 ```
 
-Submit a heavy job:
+- ☐ Heavy workers scale during burst
+- ☐ Light workers remain stable
+
+### Pod Scaling
+
 ```bash
-curl -s -X POST http://localhost:8080/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"fileSizeMb": 145, "pageCount": 980, "imageCount": 220}'
+kubectl -n workload-demo get pods -w
 ```
 
-Get status (pod-local demo store):
+- ☐ New heavy pods spin up
+- ☐ No unexpected restarts
+
+### Classifier Logs
+
 ```bash
-curl -s http://localhost:8080/jobs/<jobId>
+kubectl -n workload-demo logs -f deploy/classifier
 ```
+
+- ☐ Correct routing behavior
 
 ---
 
-## Expected behavior
+# 🛡 Production Hardening Roadmap
 
-- The classifier routes heavy jobs only to `worker-heavy`.
-- `worker-heavy` has higher memory requests/limits and scales independently.
-- `worker-light` remains stable under heavy bursts.
-- HPAs scale based on CPU (workers include optional CPU burn to demonstrate scaling).
+## Retry + DLQ
+
+Add topics:
+- `jobs.retry`
+- `jobs.dlq`
+
+Pattern:
+- Fail → retry topic with attempt count
+- Exceed max retries → DLQ
+- Ensure idempotent processing
 
 ---
 
-## Repository layout
+## Backoff Strategy
+
+Options:
+- Retry scheduler service
+- Tiered retry topics (`retry.10s`, `retry.1m`, etc.)
+- External delay queue
+
+---
+
+## Custom Metrics HPA
+
+Scale on:
+- Consumer group lag
+- Queue depth
+- Processing rate
+
+---
+
+## Prometheus Adapter
+
+Expose Kafka lag as `custom.metrics.k8s.io` and configure HPA to scale based on lag per worker pool.
+
+---
+
+## Security + Governance
+
+- SASL/SCRAM or mTLS for Kafka
+- NetworkPolicies
+- Secret management
+- Signed images + policy enforcement
+
+---
+
+## Observability
+
+- OpenTelemetry tracing with correlation IDs
+- Centralized logging
+- Dashboards for:
+  - p95 processing time
+  - Lag per topic
+  - DLQ volume
+  - HPA events
+
+---
+
+# 📦 Repository Structure
 
 ```
 .
 ├── README.md
 ├── docs/
 │   └── architecture.md
-├── infra/
-│   └── k8s/
-│       ├── 00-namespace.yaml
-│       ├── 10-kafka.yaml
-│       ├── 11-kafka-topics-init.yaml
-│       ├── 20-api.yaml
-│       ├── 21-classifier.yaml
-│       ├── 22-worker-light.yaml
-│       ├── 23-worker-heavy.yaml
-│       ├── 30-hpa.yaml
-│       └── 40-ingress-optional.yaml
-└── scripts/
-    ├── demo.sh
-    └── loadgen.py
+├── infra/k8s/
+├── services/
+├── scripts/
 ```
-
----
-
-## Notes on “AI-adjacent”
-
-This demo intentionally focuses on **infrastructure operationalization**:
-- intelligent routing
-- isolation + scaling governance
-- durability via Kafka
-- observability hooks
-
-You can later swap the heuristic classifier with a real ML model (ONNX/sklearn) without changing the infrastructure.
 
 ---
 
 ## License
 
-MIT (see `LICENSE`)
+MIT
